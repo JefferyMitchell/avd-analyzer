@@ -25,7 +25,12 @@
 #   sessionhosts.csv                 session hosts + backing VM size / OS / image
 #   appgroups.csv                    application groups + assignment counts
 #   sessions.csv                     one row per connected session (hashed user)
+#   hostperf.csv                     hourly CPU / memory / disk / input-delay / RTT per host
+#   hostapps.csv                     application names observed per host (no user data)
 #   manifest.json                    run metadata
+#
+# hostperf.csv and hostapps.csv come from the performance counters AVD Insights
+# collects into the Perf table. They are empty if Insights is not enabled.
 #
 set -euo pipefail
 
@@ -80,6 +85,11 @@ echo "resourceGroup,hostPoolName,appGroupName,type,assignedPrincipals" > "$OUT/a
 # Session-level records (one row per connected session). userID is hashed
 # inside the KQL query below, so raw usernames never leave Azure.
 echo "userID,sessionID,machineID,desktopGroup,startTime,endTime" > "$OUT/sessions.csv"
+# Hourly performance per host (AVD Insights counters). No user identifiers.
+echo "hour,machineID,cpuAvgPct,cpuP95Pct,memAvailAvgMB,memAvailMinMB,diskLatencyAvgMs,inputDelayP95Ms,inputDelayMaxMs,rttAvgMs,samples" > "$OUT/hostperf.csv"
+# Application names observed per host (from the per-process input-delay
+# counter). Process image names only; no user identifiers, no window titles.
+echo "machineID,process,activeHours,sessionDays,inputDelayAvgMs,inputDelayP95Ms,samples" > "$OUT/hostapps.csv"
 
 echo "==> Pulling host pool configuration..."
 az desktopvirtualization hostpool list --only-show-errors -o json 2>/dev/null > "$OUT/hostpools.json" || echo "[]" > "$OUT/hostpools.json"
@@ -159,23 +169,54 @@ else
 fi
 KQL_SESSIONS="WVDConnections | where TimeGenerated > ago(${LOOKBACK_DAYS}d) | where State in ('Connected','Completed') | summarize StartTime=min(TimeGenerated), EndTime=max(TimeGenerated), hadConnected=countif(State=='Connected') by CorrelationId, UserName, SessionHostName, _ResourceId | where hadConnected > 0 and EndTime > StartTime | extend DesktopGroup=tostring(split(_ResourceId,'/')[-1]), UserID=${USERID_EXPR} | project UserID, SessionID=CorrelationId, MachineID=SessionHostName, DesktopGroup, StartTime, EndTime | order by StartTime asc"
 
+# --- Performance (AVD Insights counters in the Perf table) -------------------
+# One row per host per hour. Counter names are matched case-insensitively and
+# both 'Processor' and 'Processor Information' objects are accepted, so this
+# works with the Azure Monitor Agent DCR that Insights deploys and with the
+# legacy Log Analytics agent. Disk latency is converted from seconds to ms.
+KQL_PERF="Perf | where TimeGenerated > ago(${LOOKBACK_DAYS}d) | where (ObjectName in~ ('Processor Information','Processor') and CounterName =~ '% Processor Time' and InstanceName =~ '_Total') or (ObjectName =~ 'Memory' and CounterName =~ 'Available MBytes') or (ObjectName =~ 'LogicalDisk' and CounterName =~ 'Avg. Disk sec/Transfer' and InstanceName =~ 'C:') or (ObjectName =~ 'User Input Delay per Session' and CounterName =~ 'Max Input Delay') or (ObjectName =~ 'RemoteFX Network' and CounterName in~ ('Current TCP RTT','Current UDP RTT')) | extend metric = case(CounterName =~ '% Processor Time', 'cpu', CounterName =~ 'Available MBytes', 'mem', CounterName =~ 'Avg. Disk sec/Transfer', 'disk', CounterName =~ 'Max Input Delay', 'delay', 'rtt') | summarize cpuAvgPct=round(avgif(CounterValue, metric=='cpu'),1), cpuP95Pct=round(percentileif(CounterValue,95,metric=='cpu'),1), memAvailAvgMB=round(avgif(CounterValue, metric=='mem'),0), memAvailMinMB=round(minif(CounterValue, metric=='mem'),0), diskLatencyAvgMs=round(avgif(CounterValue*1000, metric=='disk'),2), inputDelayP95Ms=round(percentileif(CounterValue,95,metric=='delay'),0), inputDelayMaxMs=round(maxif(CounterValue, metric=='delay'),0), rttAvgMs=round(avgif(CounterValue, metric=='rtt'),0), samples=count() by hour=bin(TimeGenerated,1h), Computer | order by hour asc, Computer asc"
+
+# Application inventory from the per-process input-delay counter. Instance
+# names look like 'SessionID:PID <image>'; only the image name is kept.
+# 'Max' and 'Average' are the counter's own roll-up instances, not processes.
+KQL_APPS="Perf | where TimeGenerated > ago(${LOOKBACK_DAYS}d) | where ObjectName =~ 'User Input Delay per Process' and CounterName =~ 'Max Input Delay' | where InstanceName !in~ ('Max','Average') | extend img = tolower(extract(@'<([^>]+)>', 1, InstanceName)), sess = tostring(split(InstanceName, ':')[0]) | extend process = iff(isempty(img), tolower(InstanceName), img) | summarize activeHours=dcount(bin(TimeGenerated,1h)), sessionDays=dcount(strcat(sess,'|',bin(TimeGenerated,1d))), inputDelayAvgMs=round(avg(CounterValue),0), inputDelayP95Ms=round(percentile(CounterValue,95),0), samples=count() by Computer, process | order by Computer asc, activeHours desc"
+
 echo "==> Discovering workspaces with AVD data..."
 az monitor log-analytics workspace list --only-show-errors -o json 2>/dev/null | jq -c '.[]' | while read -r ws; do
   WS_NAME=$(echo "$ws" | jq -r '.name')
   WS_CID=$(echo "$ws" | jq -r '.customerId')
   # -o tsv appends a TableName column ("<count>\tPrimaryResult"); take field 1.
-  HAS=$(az monitor log-analytics query -w "$WS_CID" --analytics-query "WVDConnections | count" --only-show-errors -o tsv 2>/dev/null | tail -1 | cut -f1 || echo "0")
-  [[ "$HAS" =~ ^[0-9]+$ ]] && [[ "$HAS" -gt 0 ]] || continue
-  echo "    workspace $WS_NAME has AVD data"
+  HAS_CONN=$(az monitor log-analytics query -w "$WS_CID" --analytics-query "WVDConnections | count" --only-show-errors -o tsv 2>/dev/null | tail -1 | cut -f1 || echo "0")
+  HAS_PERF=$(az monitor log-analytics query -w "$WS_CID" --analytics-query "Perf | where ObjectName in~ ('Processor Information','Processor','User Input Delay per Session') | take 1 | count" --only-show-errors -o tsv 2>/dev/null | tail -1 | cut -f1 || echo "0")
+  [[ "$HAS_CONN" =~ ^[0-9]+$ ]] || HAS_CONN=0
+  [[ "$HAS_PERF" =~ ^[0-9]+$ ]] || HAS_PERF=0
+  [[ "$HAS_CONN" -gt 0 || "$HAS_PERF" -gt 0 ]] || continue
 
-  az monitor log-analytics query -w "$WS_CID" --analytics-query "$KQL_SESSIONS" --only-show-errors -o json 2>/dev/null \
-    | jq -r '.[] | [.UserID, .SessionID, .MachineID, .DesktopGroup, .StartTime, .EndTime] | @csv' >> "$OUT/sessions.csv" 2>/dev/null || true
+  if [[ "$HAS_CONN" -gt 0 ]]; then
+    echo "    workspace $WS_NAME: session history"
+    az monitor log-analytics query -w "$WS_CID" --analytics-query "$KQL_SESSIONS" --only-show-errors -o json 2>/dev/null \
+      | jq -r '.[] | [.UserID, .SessionID, .MachineID, .DesktopGroup, .StartTime, .EndTime] | @csv' >> "$OUT/sessions.csv" 2>/dev/null || true
+  fi
+  if [[ "$HAS_PERF" -gt 0 ]]; then
+    echo "    workspace $WS_NAME: performance counters"
+    az monitor log-analytics query -w "$WS_CID" --analytics-query "$KQL_PERF" --only-show-errors -o json 2>/dev/null \
+      | jq -r '.[] | [.hour, .Computer, .cpuAvgPct, .cpuP95Pct, .memAvailAvgMB, .memAvailMinMB, .diskLatencyAvgMs, .inputDelayP95Ms, .inputDelayMaxMs, .rttAvgMs, .samples] | @csv' >> "$OUT/hostperf.csv" 2>/dev/null || true
+    az monitor log-analytics query -w "$WS_CID" --analytics-query "$KQL_APPS" --only-show-errors -o json 2>/dev/null \
+      | jq -r '.[] | [.Computer, .process, .activeHours, .sessionDays, .inputDelayAvgMs, .inputDelayP95Ms, .samples] | @csv' >> "$OUT/hostapps.csv" 2>/dev/null || true
+  fi
 done
 SESS_COUNT=$(($(wc -l < "$OUT/sessions.csv") - 1))
+PERF_COUNT=$(($(wc -l < "$OUT/hostperf.csv") - 1))
+APPS_COUNT=$(($(wc -l < "$OUT/hostapps.csv") - 1))
 if [[ "$SESS_COUNT" -gt 0 ]]; then
   echo "    $SESS_COUNT session record(s) exported"
 else
   echo "    no AVD session data found in any workspace (config-only collection)"
+fi
+if [[ "$PERF_COUNT" -gt 0 ]]; then
+  echo "    $PERF_COUNT host-hour performance record(s), $APPS_COUNT application record(s)"
+else
+  echo "    no performance counters found (AVD Insights not enabled, or no Perf data in the window)"
 fi
 
 # --- Manifest ----------------------------------------------------------------
@@ -186,7 +227,9 @@ cat > "$OUT/manifest.json" <<EOF
   "lookbackDays": $LOOKBACK_DAYS,
   "usernamesHashed": $([[ $HASH_USERS -eq 1 ]] && echo true || echo false),
   "hostPoolCount": $HP_COUNT,
-  "sessionRecords": $SESS_COUNT
+  "sessionRecords": $SESS_COUNT,
+  "perfRecords": $PERF_COUNT,
+  "appRecords": $APPS_COUNT
 }
 EOF
 
@@ -202,7 +245,8 @@ echo ""
 echo "==================== DONE ===================="
 echo "Host pools:      $HP_COUNT"
 echo "Session records: $SESS_COUNT"
-echo "Review:          ./$OUT/        (plain CSV + JSON)"
+echo "Perf records:    $PERF_COUNT host-hours, $APPS_COUNT application rows"
+echo "Review:        ./$OUT/        (plain CSV + JSON)"
 echo "Package:         ./$ZIP"
 echo ""
 echo "Next: download the package to your computer. In Cloud Shell:"

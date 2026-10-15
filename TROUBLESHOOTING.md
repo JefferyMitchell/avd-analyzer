@@ -64,6 +64,20 @@ az monitor log-analytics query \
 
 If this returns 0, diagnostics are not configured or the data has aged out of retention. Config-only collection is still useful, and the lack of telemetry is itself a finding.
 
+### Session records are present but performance records are zero
+
+Session history and performance counters are collected separately. Session history comes from host pool diagnostic settings. Performance counters come from the Azure Monitor Agent on each session host, configured by the data collection rule that AVD Insights creates. If you see sessions but no performance data, Insights was never enabled, or the hosts do not have the agent and data collection rule associated. Open AVD Insights in the portal and use its configuration workbook to check per host pool.
+
+Performance data is optional. The configuration and session history are still complete without it.
+
+### The performance query times out or returns nothing on a large estate
+
+The `Perf` table is the largest in the workspace. On estates with hundreds of hosts and a 90-day window the summarising query can exceed the Log Analytics query timeout, in which case the performance files are empty while everything else is complete. Re-run with a shorter window:
+
+```bash
+./avd-collect.sh -d 30
+```
+
 ### Usage queries fail with "access denied from <IP>" (workspace locked down)
 
 The query errors even though the workspace exists and has data:
