@@ -1,0 +1,2 @@
+# Scripts run in Cloud Shell (Linux). Always keep LF line endings.
+*.sh text eol=lf
