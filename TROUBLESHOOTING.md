@@ -97,19 +97,15 @@ The default lookback is 30 days. If workspace retention is shorter, you only get
 
 ---
 
-## Step 3: Upload
+## Step 3: Download
 
 ### The `download` command is not found
 
-`download` is built into Azure Cloud Shell. If you ran the script somewhere else, the zip is in the directory you ran it from. Copy it to your computer however you normally would, or upload it directly from that machine.
+`download` is built into Azure Cloud Shell. If you ran the script somewhere else, the zip is in the directory you ran it from. Copy it to your computer however you normally would.
 
 ### The package is a `.tar.gz`, not a `.zip`
 
-The script falls back to tar when `zip` is not installed. Upload it as-is. Windows 11 and macOS both open it natively.
-
-### The upload link has expired or asks me to sign in
-
-Ask your architect for a fresh file-request link. You do not need a Microsoft account to use one.
+The script falls back to tar when `zip` is not installed. Windows 11 and macOS both open it natively.
 
 ---
 

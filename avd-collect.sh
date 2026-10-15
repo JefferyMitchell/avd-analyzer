@@ -4,7 +4,7 @@
 # =============================================
 # Pulls AVD host pool configuration (ARM) and per-session usage records
 # (Log Analytics), hashes usernames, and packages everything into a single
-# zip file for you to download and upload to the link your architect gave you.
+# zip file for you to download.
 #
 # This script performs NO writes against your Azure environment. It needs an
 # identity with Reader + Log Analytics Reader on the subscription: either the
@@ -205,8 +205,6 @@ echo "Session records: $SESS_COUNT"
 echo "Review:          ./$OUT/        (plain CSV + JSON)"
 echo "Package:         ./$ZIP"
 echo ""
-echo "Next:"
-echo "  1. Download the package to your computer. In Cloud Shell:"
+echo "Next: download the package to your computer. In Cloud Shell:"
 echo "       download $ZIP"
-echo "  2. Upload it to the link your architect sent you."
 echo "=============================================="

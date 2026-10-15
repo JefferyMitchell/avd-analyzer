@@ -2,13 +2,13 @@
 
 A read-only script that gathers your **Azure Virtual Desktop (AVD)**
 configuration and session history. You run it in your own Azure Cloud Shell,
-review the output, and upload one zip file to the link your architect sends you.
+review the output, and download one zip file.
 
 | Step | Who | What happens |
 |---|---|---|
 | **1. Setup** (optional) | An administrator, once | Creates a dedicated **read-only** collector identity. No Azure resources. |
 | **2. Collect** | The collector identity, or any user with Reader rights | Reads host-pool config and session history, hashes usernames, writes one zip file |
-| **3. Upload** | You | Download the zip from Cloud Shell and drop it on the upload link |
+| **3. Download** | You | Download the zip from Cloud Shell |
 | **4. Cleanup** | You | One command removes the collector identity |
 
 Total hands-on time is about 10 minutes.
@@ -26,7 +26,7 @@ Total hands-on time is about 10 minutes.
   | **Log Analytics Reader** | Run the session-history query. |
 
 - **Usernames are SHA-256 hashed inside the Log Analytics query** with a random per-run salt. Raw usernames never reach disk and the salt is never saved. The same user hashes to the same value within one run, which is all the analysis needs.
-- **Nothing leaves your tenant automatically.** The output stays in your Cloud Shell until you download it and upload it yourself.
+- **Nothing leaves your tenant automatically.** The output stays in your Cloud Shell until you download it yourself.
 
 ### Exactly what is in the zip
 
@@ -122,11 +122,11 @@ Review:          ./avd-data-20260714-101500/        (plain CSV + JSON)
 Package:         ./avd-data-20260714-101500.zip
 ```
 
-A longer lookback gives a more representative picture. Use 90 days if your workspace retention allows it. If your AVD estate spans several subscriptions, run the script once per subscription and upload each zip.
+A longer lookback gives a more representative picture. Use 90 days if your workspace retention allows it. If your AVD estate spans several subscriptions, run the script once per subscription.
 
 ---
 
-## Step 3: Upload
+## Step 3: Download
 
 **Review first.** The output is plain CSV and JSON in the run folder:
 
@@ -141,13 +141,13 @@ Then download the zip to your computer. Cloud Shell has a built-in command for t
 download avd-data-<timestamp>.zip
 ```
 
-Your browser saves the file. Upload it to the link your architect sent you. The link is a OneDrive file-request: you can add files to it but cannot see anything else in the folder.
+Your browser saves the file.
 
 ---
 
 ## Step 4: Cleanup
 
-If you ran Step 1, remove the collector identity once the upload is done:
+If you ran Step 1, remove the collector identity once you have downloaded the zip:
 
 ```bash
 ./avd-cleanup.sh
@@ -161,7 +161,7 @@ az role definition list --custom-role-only true \
   --query "[?starts_with(roleName,'AVD Assessment Collector')].roleName" -o tsv
 ```
 
-Both should return nothing. You can also delete the local `avd-data-*` folder and zip from Cloud Shell once your architect confirms receipt.
+Both should return nothing. You can also delete the local `avd-data-*` folder and zip from Cloud Shell when you no longer need them.
 
 ---
 
