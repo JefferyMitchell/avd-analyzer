@@ -36,9 +36,11 @@ Total hands-on time is about 10 minutes.
 | `sessionhosts.csv` | Session host name, status, current sessions, backing VM size, vCPU, memory, OS, image |
 | `appgroups.csv` | Application group name, type (desktop or RemoteApp), count of assigned principals |
 | `sessions.csv` | One row per connected session: hashed user ID, session ID, host name, host pool, start time, end time |
+| `hostperf.csv` | One row per host per hour: CPU %, available memory, disk latency, user input delay, network round-trip time. From the AVD Insights counters. No user identifiers. |
+| `hostapps.csv` | Application image names seen on each host (for example `excel`, `chrome`), how many hours each was active, and its input delay. From the AVD Insights per-process counter. Process names only: no window titles, document names, or user identifiers. |
 | `manifest.json` | Run timestamp, subscription ID, lookback days, hashed flag, counts |
 
-Not collected: usernames (unless you pass `-r`), IP addresses, client details, application names, file or disk contents, network configuration, or anything outside AVD and its session hosts.
+Not collected: usernames (unless you pass `-r`), IP addresses, client details, window titles, document or file names, file or disk contents, network configuration, or anything outside AVD and its session hosts.
 
 ---
 
@@ -46,7 +48,7 @@ Not collected: usernames (unless you pass `-r`), IP addresses, client details, a
 
 - **Azure Cloud Shell (Bash)**. Open it from the Azure portal (the `>_` icon) or [shell.azure.com](https://shell.azure.com). It already has `az` and `jq` and is signed in as you.
 - **Rights.** Collection needs **Reader** and **Log Analytics Reader** on the subscription that holds your AVD estate. If you already have those, you can skip Step 1. Step 1 itself needs Owner or User Access Administrator to assign roles, plus Entra app-registration rights for the default model.
-- **Usage data needs AVD Insights.** Session history comes from the `WVDConnections` table in Log Analytics. If [AVD Insights](https://learn.microsoft.com/azure/virtual-desktop/insights) is enabled for your host pools, this is already in place. If you ship AVD logs to Log Analytics another way, the script works as long as each host pool's diagnostic setting includes the Connection log category and the workspace retains at least the lookback window (default 30 days). Without it the script still collects full configuration and reports zero session records.
+- **Usage data needs AVD Insights.** Session history comes from the `WVDConnections` table in Log Analytics, and host performance from the `Perf` table. If [AVD Insights](https://learn.microsoft.com/azure/virtual-desktop/insights) is enabled for your host pools, both are already in place. If you ship AVD logs to Log Analytics another way, the session history works as long as each host pool's diagnostic setting includes the Connection log category and the workspace retains at least the lookback window (default 30 days). Without these the script still collects full configuration and reports zero session and performance records.
 
 Get the script:
 
@@ -112,12 +114,15 @@ Expected output:
     - hp-task-workers (Pooled, 8 hosts, 1 app groups)
     - hp-developers (Personal, 15 hosts, 1 app groups)
 ==> Discovering workspaces with AVD data...
-    workspace law-avd-prod has AVD data
+    workspace law-avd-prod: session history
+    workspace law-avd-prod: performance counters
     4812 session record(s) exported
+    25200 host-hour performance record(s), 1430 application record(s)
 
 ==================== DONE ====================
 Host pools:      3
 Session records: 4812
+Perf records:    25200 host-hours, 1430 application rows
 Review:          ./avd-data-20260714-101500/        (plain CSV + JSON)
 Package:         ./avd-data-20260714-101500.zip
 ```
