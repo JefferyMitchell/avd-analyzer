@@ -7,7 +7,7 @@ zip file to the link your architect sends you.
 
 | Step | Who | What happens |
 |---|---|---|
-| **1. Setup** (optional) | A customer administrator, once | Creates a dedicated **read-only** collector identity. No Azure resources. |
+| **1. Setup** (optional) | An administrator, once | Creates a dedicated **read-only** collector identity. No Azure resources. |
 | **2. Collect** | The collector identity, or any user with Reader rights | Reads host-pool config and session history, hashes usernames, writes one zip file |
 | **3. Upload** | You | Download the zip from Cloud Shell and drop it on the upload link |
 | **4. Cleanup** | You | One command removes the collector identity |
