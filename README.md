@@ -1,38 +1,35 @@
 # AVD Assessment Collector
 
-Two scripts that gather your **Azure Virtual Desktop (AVD)** configuration and
-usage data for a Citrix persona-mapping assessment. You run them in your own
-Azure Cloud Shell. **Nothing leaves your tenant until you generate a
-time-limited, read-only link and send it to your architect.**
+A read-only script that gathers your **Azure Virtual Desktop (AVD)**
+configuration and session history for a Citrix persona-mapping assessment.
+You run it in your own Azure Cloud Shell, review the output, and upload one
+zip file to the link your architect sends you.
 
 | Step | Who | What happens |
 |---|---|---|
-| **1. Setup** | A customer administrator, once | Creates a throwaway resource group, a private storage account, and a **scoped read-only collector identity** |
-| **2. Collect** | The collector identity | Reads host-pool config and session history, hashes usernames, uploads the results to that storage account |
-| **3. Share** | You | Generate a read-only, 7-day link and send it to your architect |
-| **4. Cleanup** | You | One command removes everything the scripts created |
+| **1. Setup** (optional) | A customer administrator, once | Creates a dedicated **read-only** collector identity. No Azure resources. |
+| **2. Collect** | The collector identity, or any user with Reader rights | Reads host-pool config and session history, hashes usernames, writes one zip file |
+| **3. Upload** | You | Download the zip from Cloud Shell and drop it on the upload link |
+| **4. Cleanup** | You | One command removes the collector identity |
 
-Total hands-on time is about 15 minutes.
+Total hands-on time is about 10 minutes.
 
 ---
 
 ## Security model
 
-Your security team will want to check this, so here is exactly what the
-collector identity can do. It holds **three role assignments and nothing else**:
+- **The script performs no writes against your environment.** It only reads ARM configuration and runs one Log Analytics query. It creates nothing in your subscription.
+- If you run Step 1, the collector identity holds exactly **two built-in read roles** on the subscription and nothing else:
 
-| Role | Scope | Why |
-|---|---|---|
-| **Reader** | Subscription | Read ARM configuration. Cannot modify anything. |
-| **Log Analytics Reader** | Subscription | Run the session-history query. |
-| **Storage Blob Data Contributor** | The assessment storage account **only** | Upload results. This is the identity's single write capability. |
+  | Role | Why |
+  |---|---|
+  | **Reader** | Read AVD and VM configuration. Cannot modify anything. |
+  | **Log Analytics Reader** | Run the session-history query. |
 
-- The collector identity is **read-only against your entire environment**. It cannot change host pools, session hosts, VMs, or anything else.
-- Its only write target is a **single throwaway storage account** created by the setup step, in your subscription, with public access disabled.
 - **Usernames are SHA-256 hashed inside the Log Analytics query** with a random per-run salt. Raw usernames never reach disk and the salt is never saved. The same user hashes to the same value within one run, which is all the analysis needs.
-- Everything created is tagged `purpose=avd-assessment temporary=true` and is removed by the cleanup script.
+- **Nothing leaves your tenant automatically.** The output stays in your Cloud Shell until you download it and upload it yourself.
 
-### Exactly what is collected
+### Exactly what is in the zip
 
 | File | Contents |
 |---|---|
@@ -49,10 +46,10 @@ Not collected: usernames (unless you pass `-r`), IP addresses, client details, a
 ## Prerequisites
 
 - **Azure Cloud Shell (Bash)**. Open it from the Azure portal (the `>_` icon) or [shell.azure.com](https://shell.azure.com). It already has `az` and `jq` and is signed in as you.
-- **Setup** needs someone who can create a resource group and storage account and assign roles at subscription scope (Owner, or User Access Administrator plus Contributor). The default identity model also needs Entra rights to create an app registration. If that is locked down, use `-m role` (see below).
-- **Usage data needs diagnostics.** Session history comes from Log Analytics. Your host pools must already have diagnostic settings sending `WVDConnections` to a workspace, with retention covering the lookback window (default 30 days). Without it the scripts still collect full configuration and simply report zero session records.
+- **Rights.** Collection needs **Reader** and **Log Analytics Reader** on the subscription that holds your AVD estate. If you already have those, you can skip Step 1. Step 1 itself needs Owner or User Access Administrator to assign roles, plus Entra app-registration rights for the default model.
+- **Usage data needs diagnostics.** Session history comes from Log Analytics. Your host pools must already have diagnostic settings sending `WVDConnections` to a workspace, with retention covering the lookback window (default 30 days). Without it the script still collects full configuration and reports zero session records.
 
-Get the scripts:
+Get the script:
 
 ```bash
 git clone https://github.com/JefferyMitchell/AVD-Collector.git
@@ -62,48 +59,51 @@ chmod +x avd-setup.sh avd-collect.sh
 
 ---
 
-## Step 1: Setup
+## Step 1: Setup (optional)
+
+Skip this if you will run collection as a user who already holds Reader and Log Analytics Reader. Run it if your security team wants collection to happen under a dedicated identity they can audit and delete afterward.
 
 ```bash
-./avd-setup.sh                       # default: service principal, current subscription
-./avd-setup.sh -m role               # custom role on your own user (when SP creation is blocked)
-./avd-setup.sh -s <subId> -l eastus  # explicit subscription and region
+./avd-setup.sh                 # default: service principal, current subscription
+./avd-setup.sh -m role         # custom read-only role on your own user (when SP creation is blocked)
+./avd-setup.sh -s <subId>      # explicit subscription
 ```
 
 The script prints a plan and asks you to confirm before creating anything.
 
 | `-m` | Model | Use when |
 |---|---|---|
-| `sp` (default) | A service principal created with no default role, then given the three roles above | You have app-registration rights. Cleanest isolation: collection runs as a separate identity that is deleted at cleanup. |
-| `role` | A purpose-built custom role assigned to your current user | Service principal creation is blocked in your tenant. |
+| `sp` (default) | A service principal created with no default role, then given the two read roles | You have app-registration rights. Cleanest isolation: a separate identity that is deleted at cleanup. |
+| `role` | A purpose-built read-only custom role assigned to your current user | Service principal creation is blocked in your tenant. |
 
 Setup writes two files into your Cloud Shell directory:
 
 - `avd-assessment.env` holds the context for Step 2. In the `sp` model it contains the service principal secret. Cleanup deletes it.
-- `avd-cleanup.sh` is the one-command teardown with your resource names baked in.
+- `avd-cleanup.sh` removes the identity.
 
 ---
 
 ## Step 2: Collect
 
-Load the context, then (service principal model only) sign in as the collector:
+If you ran Step 1, load the context and (service principal model only) sign in as the collector:
 
 ```bash
 source avd-assessment.env
 
-# sp model only. Skip this line if you used -m role:
+# sp model only. Skip this line if you used -m role or skipped Step 1:
 az login --service-principal -u "$AVD_APP_ID" -p "$AVD_SP_PASS" --tenant "$AVD_TENANT_ID"
 ```
 
 Then collect:
 
 ```bash
-./avd-collect.sh            # 30-day lookback, usernames hashed
-./avd-collect.sh -d 90      # 90-day lookback
-./avd-collect.sh -r         # keep raw usernames (only with your security team's agreement)
+./avd-collect.sh                # 30-day lookback, usernames hashed
+./avd-collect.sh -d 90          # 90-day lookback
+./avd-collect.sh -s <subId>     # a specific subscription
+./avd-collect.sh -r             # keep raw usernames (only with your security team's agreement)
 ```
 
-The results are written to a local folder `avd-data-<timestamp>/` **and** uploaded to the assessment storage account. Expected output:
+Expected output:
 
 ```
 ==> Lookback: 30d | usernames: hashed
@@ -115,74 +115,54 @@ The results are written to a local folder `avd-data-<timestamp>/` **and** upload
 ==> Discovering workspaces with AVD data...
     workspace law-avd-prod has AVD data
     4812 session record(s) exported
-==> Uploading results to stavdassess12345/results/avd-data-20260714-101500/ ...
+
+==================== DONE ====================
+Host pools:      3
+Session records: 4812
+Review:          ./avd-data-20260714-101500/        (plain CSV + JSON)
+Package:         ./avd-data-20260714-101500.zip
 ```
 
-A longer lookback gives a more representative picture. Use 90 days if your workspace retention allows it.
+A longer lookback gives a more representative picture. Use 90 days if your workspace retention allows it. If your AVD estate spans several subscriptions, run the script once per subscription and upload each zip.
 
 ---
 
-## Step 3: Share
+## Step 3: Upload
 
-**Review first.** The output is plain CSV and JSON in the local run folder:
+**Review first.** The output is plain CSV and JSON in the run folder:
 
 ```bash
-ls avd-data-*/
 cat avd-data-*/manifest.json          # confirm "usernamesHashed": true
 head avd-data-*/sessions.csv
 ```
 
-Then sign back in as yourself (the service principal cannot issue user-delegated links) and generate the link. Step 2 prints this command with your values filled in:
+Then download the zip to your computer. Cloud Shell has a built-in command for this:
 
 ```bash
-az login
-source avd-assessment.env
-az storage container generate-sas \
-  --account-name "$AVD_STORAGE" --name "$AVD_CONTAINER" \
-  --permissions rl \
-  --expiry $(date -u -d '+7 days' '+%Y-%m-%dT%H:%MZ') \
-  --auth-mode login --as-user -o tsv
+download avd-data-<timestamp>.zip
 ```
 
-Send your architect the full URL:
-
-```
-https://<storage-account>.blob.core.windows.net/results?<sas-token>
-```
-
-| Property | Value |
-|---|---|
-| Permissions | Read and list only. The holder cannot write, change, or delete. |
-| Scope | The `results` container only. |
-| Lifetime | 7 days, then it stops working. |
-| Revocation | Run cleanup, or delete the storage account, to invalidate it immediately. |
-
-Use whatever channel your organisation uses for time-limited credentials.
+Your browser saves the file. Upload it to the link your architect sent you. The link is a OneDrive file-request: you can add files to it but cannot see anything else in the folder.
 
 ---
 
 ## Step 4: Cleanup
 
-Once your architect confirms they have downloaded the results:
+If you ran Step 1, remove the collector identity once the upload is done:
 
 ```bash
 ./avd-cleanup.sh
 ```
 
-This deletes the resource group (storage account and all results), the service principal or custom role, and the local env file. **It also invalidates the shared link.**
-
-Verify nothing is left:
+This deletes the service principal or custom role and the local env file. Verify nothing is left:
 
 ```bash
-az group list --query "[?tags.purpose=='avd-assessment'].name" -o tsv
 az ad sp list --display-name "sp-avd-assessment" --query "[].displayName" -o tsv
 az role definition list --custom-role-only true \
   --query "[?starts_with(roleName,'AVD Assessment Collector')].roleName" -o tsv
 ```
 
-All three should return nothing. The resource group delete runs in the background, so allow a minute.
-
-If you lost the cleanup script, everything is tagged `purpose=avd-assessment`. Find the resource group with the first command above and delete it with `az group delete -n <name> --yes`, then remove the service principal or custom role by name.
+Both should return nothing. You can also delete the local `avd-data-*` folder and zip from Cloud Shell once your architect confirms receipt.
 
 ---
 
