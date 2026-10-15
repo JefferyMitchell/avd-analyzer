@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# AVD Assessment - STEP 1: SETUP  (optional; run once by a customer administrator)
-# ===============================================================================
+# AVD Assessment - STEP 1: SETUP  (optional; run once by an administrator)
+# ========================================================================
 # Creates a dedicated READ-ONLY collector identity so the collection step can
 # run under an identity your security team can audit line by line.
 #
