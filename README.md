@@ -46,7 +46,7 @@ Not collected: usernames (unless you pass `-r`), IP addresses, client details, a
 
 - **Azure Cloud Shell (Bash)**. Open it from the Azure portal (the `>_` icon) or [shell.azure.com](https://shell.azure.com). It already has `az` and `jq` and is signed in as you.
 - **Rights.** Collection needs **Reader** and **Log Analytics Reader** on the subscription that holds your AVD estate. If you already have those, you can skip Step 1. Step 1 itself needs Owner or User Access Administrator to assign roles, plus Entra app-registration rights for the default model.
-- **Usage data needs diagnostics.** Session history comes from Log Analytics. Your host pools must already have diagnostic settings sending `WVDConnections` to a workspace, with retention covering the lookback window (default 30 days). Without it the script still collects full configuration and reports zero session records.
+- **Usage data needs AVD Insights.** Session history comes from the `WVDConnections` table in Log Analytics. If [AVD Insights](https://learn.microsoft.com/azure/virtual-desktop/insights) is enabled for your host pools, this is already in place. If you ship AVD logs to Log Analytics another way, the script works as long as each host pool's diagnostic setting includes the Connection log category and the workspace retains at least the lookback window (default 30 days). Without it the script still collects full configuration and reports zero session records.
 
 Get the script:
 
