@@ -1,9 +1,8 @@
 # AVD Assessment Collector
 
 A read-only script that gathers your **Azure Virtual Desktop (AVD)**
-configuration and session history for a Citrix persona-mapping assessment.
-You run it in your own Azure Cloud Shell, review the output, and upload one
-zip file to the link your architect sends you.
+configuration and session history. You run it in your own Azure Cloud Shell,
+review the output, and upload one zip file to the link your architect sends you.
 
 | Step | Who | What happens |
 |---|---|---|
@@ -172,4 +171,4 @@ See [TROUBLESHOOTING.md](TROUBLESHOOTING.md). The most common causes are a locke
 
 ## Disclaimer
 
-This project is not affiliated with or endorsed by Microsoft or Citrix. Review the scripts and test in a non-production subscription before running against production.
+This project is not affiliated with or endorsed by Microsoft. Review the scripts and test in a non-production subscription before running against production.
