@@ -1,50 +1,51 @@
 #!/usr/bin/env bash
 #
-# AVD Assessment - STEP 2: COLLECT  (runs under the scoped read-only identity)
-# ===========================================================================
+# AVD Assessment - STEP 2: COLLECT  (read-only)
+# =============================================
 # Pulls AVD host pool configuration (ARM) and per-session usage records
-# (Log Analytics), hashes usernames by default, and uploads CSV + JSON to the
-# assessment storage container created in Step 1.
+# (Log Analytics), hashes usernames, and packages everything into a single
+# zip file for you to download and upload to the link your architect gave you.
 #
-# Prereq: source the env file from setup, and (SP model) log in as the SP:
-#   source avd-assessment.env
-#   # SP model only:
-#   az login --service-principal -u "$AVD_APP_ID" -p "$AVD_SP_PASS" --tenant "$AVD_TENANT_ID"
+# This script performs NO writes against your Azure environment. It needs an
+# identity with Reader + Log Analytics Reader on the subscription: either the
+# one avd-setup.sh created, or your own user if you already hold those roles.
+#
+# Run:
+#   source avd-assessment.env       # if you ran avd-setup.sh
+#   az login --service-principal -u "$AVD_APP_ID" -p "$AVD_SP_PASS" --tenant "$AVD_TENANT_ID"   # sp model only
 #   ./avd-collect.sh
 #
 # Flags:
 #   -d <days>   Log Analytics lookback window (default 30)
+#   -s <subId>  Subscription to collect from (default: AVD_SUB_ID from env, else current)
 #   -r          Keep RAW usernames (default: SHA-256 hashed)
 #
-# Output files (one folder per run, avd-data-<timestamp>/):
+# Output: avd-data-<timestamp>.zip containing
 #   hostpools.csv / hostpools.json   host pool configuration
 #   sessionhosts.csv                 session hosts + backing VM size / OS / image
 #   appgroups.csv                    application groups + assignment counts
 #   sessions.csv                     one row per connected session (hashed user)
 #   manifest.json                    run metadata
 #
-# This session is READ-ONLY against the environment. The only write is
-# uploading results to the single assessment storage account.
-#
 set -euo pipefail
 
 LOOKBACK_DAYS=30
 HASH_USERS=1
+SUB="${AVD_SUB_ID:-}"
 
-while getopts "d:rh" opt; do
+while getopts "d:s:rh" opt; do
   case $opt in
     d) LOOKBACK_DAYS="$OPTARG" ;;
+    s) SUB="$OPTARG" ;;
     r) HASH_USERS=0 ;;
     h) grep '^#' "$0" | sed 's/^#//'; exit 0 ;;
     *) echo "Invalid option"; exit 1 ;;
   esac
 done
 
-: "${AVD_SUB_ID:?source avd-assessment.env first}"
-: "${AVD_STORAGE:?source avd-assessment.env first}"
-: "${AVD_CONTAINER:?source avd-assessment.env first}"
-
-az account set --subscription "$AVD_SUB_ID"
+az account show >/dev/null 2>&1 || { echo "ERROR: run this in Cloud Shell (already authenticated) or 'az login'."; exit 1; }
+[[ -n "$SUB" ]] && az account set --subscription "$SUB"
+SUB_ID=$(az account show --query id -o tsv)
 
 TS=$(date +%Y%m%d-%H%M%S)
 OUT="avd-data-$TS"
@@ -142,7 +143,7 @@ jq -c '.[]' "$OUT/hostpools.json" | while read -r hp; do
     echo "$AG_RG,$HP_NAME,$AG_NAME,$AG_TYPE,$ASSIGNED" >> "$OUT/appgroups.csv"
   done
 
-  echo "$AVD_SUB_ID,$RG,$HP_NAME,$HP_TYPE,$LB,$MAX,$SVMOC,$VALENV,$SH_COUNT,$AG_COUNT,$HP_REGION,$SESSUP,$ALLOC" >> "$OUT/hostpools.csv"
+  echo "$SUB_ID,$RG,$HP_NAME,$HP_TYPE,$LB,$MAX,$SVMOC,$VALENV,$SH_COUNT,$AG_COUNT,$HP_REGION,$SESSUP,$ALLOC" >> "$OUT/hostpools.csv"
   echo "    - $HP_NAME ($HP_TYPE, $SH_COUNT hosts, $AG_COUNT app groups)"
 done
 rm -f "$OUT/_sh.json" "$OUT/_ag.json" "$OUT"/_sku_*.json
@@ -181,7 +182,7 @@ fi
 cat > "$OUT/manifest.json" <<EOF
 {
   "generated": "$TS",
-  "subscription": "$AVD_SUB_ID",
+  "subscription": "$SUB_ID",
   "lookbackDays": $LOOKBACK_DAYS,
   "usernamesHashed": $([[ $HASH_USERS -eq 1 ]] && echo true || echo false),
   "hostPoolCount": $HP_COUNT,
@@ -189,23 +190,23 @@ cat > "$OUT/manifest.json" <<EOF
 }
 EOF
 
-# --- Upload to assessment storage -------------------------------------------
-echo "==> Uploading results to $AVD_STORAGE/$AVD_CONTAINER/$OUT/ ..."
-az storage blob upload-batch \
-  --account-name "$AVD_STORAGE" --auth-mode login \
-  --destination "$AVD_CONTAINER" --destination-path "$OUT" \
-  --source "$OUT" --only-show-errors -o none
+# --- Package -----------------------------------------------------------------
+ZIP="$OUT.zip"
+if command -v zip >/dev/null 2>&1; then
+  zip -qr "$ZIP" "$OUT"
+else
+  ZIP="$OUT.tar.gz"; tar -czf "$ZIP" "$OUT"
+fi
 
 echo ""
 echo "==================== DONE ===================="
 echo "Host pools:      $HP_COUNT"
 echo "Session records: $SESS_COUNT"
-echo "Local copy:      ./$OUT/   (review this before sharing)"
-echo "Uploaded to:     $AVD_STORAGE / $AVD_CONTAINER / $OUT/"
+echo "Review:          ./$OUT/        (plain CSV + JSON)"
+echo "Package:         ./$ZIP"
 echo ""
-echo "To share, sign back in as yourself (az login) and generate a read-only SAS:"
-echo "  az storage container generate-sas --account-name $AVD_STORAGE \\"
-echo "    --name $AVD_CONTAINER --permissions rl \\"
-echo "    --expiry \$(date -u -d '+7 days' '+%Y-%m-%dT%H:%MZ') \\"
-echo "    --auth-mode login --as-user -o tsv"
+echo "Next:"
+echo "  1. Download the package to your computer. In Cloud Shell:"
+echo "       download $ZIP"
+echo "  2. Upload it to the link your architect sent you."
 echo "=============================================="

@@ -10,13 +10,11 @@ Your account lacks Entra app-registration rights. Use the custom-role model inst
 ./avd-setup.sh -m role
 ```
 
+Or skip Step 1 entirely and run collection as a user who already holds Reader and Log Analytics Reader.
+
 ### "AuthorizationFailed" when assigning roles
 
-Creating role assignments requires **Owner** or **User Access Administrator** at subscription scope. Contributor alone can create resources but cannot grant roles. Ask whoever holds that role to run Step 1.
-
-### Storage account name already taken
-
-Storage account names are globally unique across Azure. The name uses a timestamp suffix, so collisions are rare. Re-run `./avd-setup.sh` to get a new suffix.
+Creating role assignments requires **Owner** or **User Access Administrator** at subscription scope. Contributor alone cannot grant roles. Ask whoever holds that role to run Step 1, or skip Step 1 as above.
 
 ### The custom role is not recognised immediately
 
@@ -26,17 +24,6 @@ RBAC changes take time to propagate. The `role` model already waits 20 seconds. 
 
 ## Step 2: Collect
 
-### "source avd-assessment.env first"
-
-Run the collector from the same directory where setup wrote the env file:
-
-```bash
-source avd-assessment.env
-./avd-collect.sh
-```
-
-If Cloud Shell timed out and the file is gone, re-run Step 1, or reconstruct the variables from the resource names in the portal.
-
 ### Zero host pools found
 
 Check you are pointed at the right subscription:
@@ -45,7 +32,23 @@ Check you are pointed at the right subscription:
 az account show --query name -o tsv
 ```
 
-The collector's Reader role is scoped to the subscription Step 1 ran against. If your AVD estate lives in a different subscription, re-run Step 1 there with `-s <subId>`. Multi-subscription collection in a single run is not supported. Run the scripts once per subscription.
+If your AVD estate lives in a different subscription, pass it explicitly:
+
+```bash
+./avd-collect.sh -s <subId>
+```
+
+The collector identity from Step 1 only has rights on the subscription Step 1 ran against. For several subscriptions, run Step 1 and Step 2 once per subscription.
+
+### "AuthorizationFailed" while collecting
+
+The signed-in identity lacks Reader or Log Analytics Reader on this subscription. Confirm who you are:
+
+```bash
+az account show --query user.name -o tsv    # sp model: should be the app ID
+```
+
+If you just ran Step 1, role assignments can take a few minutes to propagate. Wait and re-run. Collection is safe to repeat.
 
 ### No session records, only configuration files
 
@@ -70,11 +73,11 @@ InsufficientAccessError / NspValidationFailedError:
 Access to workspace '<name>' from '<your IP>' is denied.
 ```
 
-This is **not** a permissions problem with the collector identity. The Log Analytics workspace has **public query access disabled** and is reachable only over Private Link or from inside an Azure Monitor Private Link Scope or Network Security Perimeter. Cloud Shell egresses from a public IP, so the query is blocked at the network layer before RBAC is evaluated.
+This is **not** a permissions problem. The Log Analytics workspace has **public query access disabled** and is reachable only over Private Link or from inside an Azure Monitor Private Link Scope or Network Security Perimeter. Cloud Shell egresses from a public IP, so the query is blocked at the network layer before RBAC is evaluated.
 
 This is a deliberate, mature security choice. To collect usage data anyway, pick one:
 
-- **Run collection from inside your network.** Use a jump host or VM on a VNet inside the workspace's Private Link scope, or Cloud Shell with VNet integration. This keeps the read-only model intact.
+- **Run collection from inside your network.** Use a jump host or VM on a VNet inside the workspace's Private Link scope, or Cloud Shell with VNet integration. The script needs only `az` and `jq`.
 - **Temporarily allow query.** Add the collector's egress IP to the Network Security Perimeter or firewall rules, or re-enable public query for the assessment window and revert afterward:
   ```bash
   az monitor log-analytics workspace update \
@@ -92,32 +95,21 @@ The default lookback is 30 days. If workspace retention is shorter, you only get
 ./avd-collect.sh -d 90
 ```
 
-### Upload fails with an authorization error
-
-The Storage Blob Data Contributor assignment is scoped to the assessment storage account, and data-plane role assignments can take a few minutes to propagate. Wait a couple of minutes and re-run. Collection is safe to repeat. It writes a new timestamped folder each time.
-
-Confirm you are signed in as the collector identity (sp model):
-
-```bash
-az account show --query user.name -o tsv    # should be the app ID, not your user
-```
-
 ---
 
-## Step 3: Share
+## Step 3: Upload
 
-### The SAS command fails with "auth-mode login" or "as-user" errors
+### The `download` command is not found
 
-`--as-user` requires a signed-in **user**, not the service principal. Sign back in as yourself first:
+`download` is built into Azure Cloud Shell. If you ran the script somewhere else, the zip is in the directory you ran it from. Copy it to your computer however you normally would, or upload it directly from that machine.
 
-```bash
-az login
-source avd-assessment.env
-```
+### The package is a `.tar.gz`, not a `.zip`
 
-### The architect says the link expired
+The script falls back to tar when `zip` is not installed. Upload it as-is. Windows 11 and macOS both open it natively.
 
-Links last 7 days. Generate a fresh one with the same command. The data is unchanged as long as you have not run cleanup.
+### The upload link has expired or asks me to sign in
+
+Ask your architect for a fresh file-request link. You do not need a Microsoft account to use one.
 
 ---
 
