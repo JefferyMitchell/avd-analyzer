@@ -52,8 +52,8 @@ Not collected: usernames (unless you pass `-r`), IP addresses, client details, a
 Get the script:
 
 ```bash
-git clone https://github.com/JefferyMitchell/AVD-Collector.git
-cd AVD-Collector
+git clone https://github.com/JefferyMitchell/avd-analyzer.git
+cd avd-analyzer
 chmod +x avd-setup.sh avd-collect.sh
 ```
 

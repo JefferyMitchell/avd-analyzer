@@ -115,4 +115,4 @@ Ask your architect for a fresh file-request link. You do not need a Microsoft ac
 
 ## Still stuck?
 
-Open an issue on [GitHub](https://github.com/JefferyMitchell/AVD-Collector/issues) with the command you ran and the error output. Redact subscription IDs and tenant IDs.
+Open an issue on [GitHub](https://github.com/JefferyMitchell/avd-analyzer/issues) with the command you ran and the error output. Redact subscription IDs and tenant IDs.
