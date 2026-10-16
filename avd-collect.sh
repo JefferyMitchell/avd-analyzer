@@ -83,7 +83,9 @@ echo "subscription,resourceGroup,hostPoolName,type,loadBalancer,maxSessionLimit,
 echo "resourceGroup,hostPoolName,sessionHostName,status,sessions,allowNewSession,vmName,vmSize,vCPU,memoryGB,osType,imageOffer,imageSku,region" > "$OUT/sessionhosts.csv"
 echo "resourceGroup,hostPoolName,appGroupName,type,assignedPrincipals" > "$OUT/appgroups.csv"
 # Session-level records (one row per connected session). userID is hashed
-# inside the KQL query below, so raw usernames never leave Azure.
+# inside the KQL query below, so raw usernames never leave Azure. A session
+# that is still connected at collection time has no Completed event yet; its
+# endTime is set to the collection time so long-running sessions are not lost.
 echo "userID,sessionID,machineID,desktopGroup,startTime,endTime" > "$OUT/sessions.csv"
 # Hourly performance per host (AVD Insights counters). No user identifiers.
 echo "hour,machineID,cpuAvgPct,cpuP95Pct,memAvailAvgMB,memAvailMinMB,diskLatencyAvgMs,inputDelayP95Ms,inputDelayMaxMs,rttAvgMs,samples" > "$OUT/hostperf.csv"
@@ -167,7 +169,7 @@ if [[ "$HASH_USERS" -eq 1 ]]; then
 else
   USERID_EXPR="UserName"
 fi
-KQL_SESSIONS="WVDConnections | where TimeGenerated > ago(${LOOKBACK_DAYS}d) | where State in ('Connected','Completed') | summarize StartTime=min(TimeGenerated), EndTime=max(TimeGenerated), hadConnected=countif(State=='Connected') by CorrelationId, UserName, SessionHostName, _ResourceId | where hadConnected > 0 and EndTime > StartTime | extend DesktopGroup=tostring(split(_ResourceId,'/')[-1]), UserID=${USERID_EXPR} | project UserID, SessionID=CorrelationId, MachineID=SessionHostName, DesktopGroup, StartTime, EndTime | order by StartTime asc"
+KQL_SESSIONS="WVDConnections | where TimeGenerated > ago(${LOOKBACK_DAYS}d) | where State in ('Connected','Completed') | summarize StartTime=min(TimeGenerated), EndTime=max(TimeGenerated), hadConnected=countif(State=='Connected'), hadCompleted=countif(State=='Completed') by CorrelationId, UserName, SessionHostName, _ResourceId | where hadConnected > 0 | extend EndTime = iff(hadCompleted > 0, EndTime, now()) | where EndTime > StartTime | extend DesktopGroup=tostring(split(_ResourceId,'/')[-1]), UserID=${USERID_EXPR} | project UserID, SessionID=CorrelationId, MachineID=SessionHostName, DesktopGroup, StartTime, EndTime | order by StartTime asc"
 
 # --- Performance (AVD Insights counters in the Perf table) -------------------
 # One row per host per hour. Counter names are matched case-insensitively and
